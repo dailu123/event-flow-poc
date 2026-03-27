@@ -1,0 +1,62 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: eventflow-sample
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,metrics
+  metrics:
+    tags:
+      application: eventflow-sample
+
+# Set to false to disable auto-run demo events on startup (use REST API instead)
+demo:
+  auto-run: true
+
+# ============ EventFlow Configuration ============
+eventflow:
+  enabled: true
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    group-id: ${spring.application.name}-eventflow
+    # topics left empty → Kafka adapter will NOT start (DemoRunner provides events instead)
+    # To use real Kafka: uncomment and set topics
+    # topics:
+    #   - cdc_oceanbase_main
+    dlt:
+      topic-suffix: .DLT
+      enabled: true
+  dispatch:
+    ordered-worker-count: 4
+    concurrent-core-size: 4
+    concurrent-max-size: 8
+  backpressure:
+    high-water-mark: 1000
+    low-water-mark: 500
+  idempotent:
+    enabled: true
+    cache-size: 100000
+    ttl: 10m
+  shutdown:
+    timeout-seconds: 10
+  observability:
+    tracing-enabled: true
+    metrics-enabled: true
+
+# ============ OpenTelemetry ============
+otel:
+  service:
+    name: eventflow-sample
+
+# ============ Logging ============
+logging:
+  level:
+    com.hsbc.pluse: DEBUG
+    io.opentelemetry.exporter.logging: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] [traceId=%X{traceId:-}] %-5level %logger{36} - %msg%n"

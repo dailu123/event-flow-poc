@@ -1,0 +1,268 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "eventflow-metrics",
+    "title": "EventFlow - Performance & Tracing Dashboard",
+    "tags": ["eventflow", "performance"],
+    "timezone": "browser",
+    "refresh": "5s",
+    "time": {
+      "from": "now-15m",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "HTTP Request Rate (req/sec)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+        "datasource": { "uid": "PROMETHEUS_UID", "type": "prometheus" },
+        "targets": [
+          {
+            "expr": "rate(http_server_requests_seconds_count{application=\"eventflow-sample\"}[1m])",
+            "legendFormat": "{{method}} {{uri}} [{{status}}]"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "reqps",
+            "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "HTTP Response Time (p95)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+        "datasource": { "uid": "PROMETHEUS_UID", "type": "prometheus" },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(http_server_requests_seconds_bucket{application=\"eventflow-sample\"}[1m]))",
+            "legendFormat": "p95 {{uri}}"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(http_server_requests_seconds_bucket{application=\"eventflow-sample\"}[1m]))",
+            "legendFormat": "p99 {{uri}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "EventFlow Pipeline Duration",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+        "datasource": { "uid": "PROMETHEUS_UID", "type": "prometheus" },
+        "targets": [
+          {
+            "expr": "rate(eventflow_pipeline_duration_seconds_sum{application=\"eventflow-sample\"}[1m]) / rate(eventflow_pipeline_duration_seconds_count{application=\"eventflow-sample\"}[1m])",
+            "legendFormat": "avg {{routeKey}} [{{status}}]"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2 }
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Pipeline Events Rate (events/sec)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+        "datasource": { "uid": "PROMETHEUS_UID", "type": "prometheus" },
+        "targets": [
+          {
+            "expr": "rate(eventflow_pipeline_duration_seconds_count{application=\"eventflow-sample\"}[1m])",
+            "legendFormat": "{{routeKey}} [{{status}}]"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ops",
+            "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 1, "stacking": { "mode": "normal" } }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "JVM Heap Memory Usage",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+        "datasource": { "uid": "PROMETHEUS_UID", "type": "prometheus" },
+        "targets": [
+          {
+            "expr": "jvm_memory_used_bytes{application=\"eventflow-sample\", area=\"heap\"}",
+            "legendFormat": "Used {{id}}"
+          },
+          {
+            "expr": "jvm_memory_committed_bytes{application=\"eventflow-sample\", area=\"heap\"}",
+            "legendFormat": "Committed {{id}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "bytes",
+            "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 1 }
+          }
+        }
+      },
+      {
+        "id": 6,
+        "title": "JVM Threads",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+        "datasource": { "uid": "PROMETHEUS_UID", "type": "prometheus" },
+        "targets": [
+          {
+            "expr": "jvm_threads_live_threads{application=\"eventflow-sample\"}",
+            "legendFormat": "Live Threads"
+          },
+          {
+            "expr": "jvm_threads_peak_threads{application=\"eventflow-sample\"}",
+            "legendFormat": "Peak Threads"
+          },
+          {
+            "expr": "jvm_threads_daemon_threads{application=\"eventflow-sample\"}",
+            "legendFormat": "Daemon Threads"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+          }
+        }
+      },
+      {
+        "id": 7,
+        "title": "GC Pause Time",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+        "datasource": { "uid": "PROMETHEUS_UID", "type": "prometheus" },
+        "targets": [
+          {
+            "expr": "rate(jvm_gc_pause_seconds_sum{application=\"eventflow-sample\"}[1m])",
+            "legendFormat": "{{action}} {{cause}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "custom": { "drawStyle": "bars", "fillOpacity": 50, "lineWidth": 1 }
+          }
+        }
+      },
+      {
+        "id": 8,
+        "title": "System CPU & Process CPU",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+        "datasource": { "uid": "PROMETHEUS_UID", "type": "prometheus" },
+        "targets": [
+          {
+            "expr": "system_cpu_usage{application=\"eventflow-sample\"}",
+            "legendFormat": "System CPU"
+          },
+          {
+            "expr": "process_cpu_usage{application=\"eventflow-sample\"}",
+            "legendFormat": "Process CPU"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0,
+            "max": 1,
+            "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 }
+          }
+        }
+      },
+      {
+        "id": 9,
+        "title": "Trace Explorer (Jaeger)",
+        "type": "traces",
+        "gridPos": { "h": 10, "w": 24, "x": 0, "y": 24 },
+        "datasource": { "uid": "JAEGER_UID", "type": "jaeger" },
+        "targets": [
+          {
+            "query": "eventflow-sample",
+            "queryType": "search"
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "HTTP Total Requests (stat)",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 4, "x": 16, "y": 16 },
+        "datasource": { "uid": "PROMETHEUS_UID", "type": "prometheus" },
+        "targets": [
+          {
+            "expr": "sum(http_server_requests_seconds_count{application=\"eventflow-sample\"})",
+            "legendFormat": "Total Requests"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "short" }
+        }
+      },
+      {
+        "id": 11,
+        "title": "Pipeline Events Total (stat)",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 4, "x": 20, "y": 16 },
+        "datasource": { "uid": "PROMETHEUS_UID", "type": "prometheus" },
+        "targets": [
+          {
+            "expr": "sum(eventflow_pipeline_duration_seconds_count{application=\"eventflow-sample\"})",
+            "legendFormat": "Pipeline Events"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "short" }
+        }
+      },
+      {
+        "id": 12,
+        "title": "Uptime",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 4, "x": 16, "y": 20 },
+        "datasource": { "uid": "PROMETHEUS_UID", "type": "prometheus" },
+        "targets": [
+          {
+            "expr": "process_uptime_seconds{application=\"eventflow-sample\"}",
+            "legendFormat": "Uptime"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "s" }
+        }
+      },
+      {
+        "id": 13,
+        "title": "Active HTTP Connections",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 4, "x": 20, "y": 20 },
+        "datasource": { "uid": "PROMETHEUS_UID", "type": "prometheus" },
+        "targets": [
+          {
+            "expr": "tomcat_threads_busy_threads{application=\"eventflow-sample\"}",
+            "legendFormat": "Busy Threads"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "short" }
+        }
+      }
+    ],
+    "schemaVersion": 39
+  },
+  "overwrite": true
+}
