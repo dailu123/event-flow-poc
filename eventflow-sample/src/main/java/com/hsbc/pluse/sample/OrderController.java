@@ -115,7 +115,7 @@ public class OrderController {
                         tracer.setAttribute("api.result", "NO_MATCH");
                         return Map.of("status", "NO_MATCH",
                                 "traceId", traceId,
-                                "jaegerUrl", "http://localhost:16686/trace/" + traceId,
+                                "grafanaUrl", "http://localhost:3000/explore?left=%7B%22queries%22:%5B%7B%22query%22:%22" + traceId + "%22,%22queryType%22:%22traceql%22%7D%5D%7D",
                                 "message", "No pipeline matched");
                     }
 
@@ -148,7 +148,7 @@ public class OrderController {
                     Map<String, Object> response = new LinkedHashMap<>();
                     response.put("status", "OK");
                     response.put("traceId", traceId);
-                    response.put("jaegerUrl", "http://localhost:16686/trace/" + traceId);
+                    response.put("grafanaUrl", "http://localhost:3000/explore?left=%7B%22queries%22:%5B%7B%22query%22:%22" + traceId + "%22,%22queryType%22:%22traceql%22%7D%5D%7D");
                     response.put("routeKey", table + ":" + op);
                     response.put("eventId", envelope.getId());
                     response.put("pipelines", results);

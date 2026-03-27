@@ -173,7 +173,7 @@ public class LoadTestController {
 
                     response.put("orderedWorkerQueues", dispatcher.orderedWorkerQueueSizes());
                     response.put("traceId", traceId);
-                    response.put("jaegerUrl", "http://localhost:16686/trace/" + traceId);
+                    response.put("grafanaUrl", "http://localhost:3000/explore?left=%7B%22queries%22:%5B%7B%22query%22:%22" + traceId + "%22,%22queryType%22:%22traceql%22%7D%5D%7D");
 
                     return response;
                 }
