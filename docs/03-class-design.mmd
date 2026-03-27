@@ -1,0 +1,298 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '12px'}}}%%
+classDiagram
+    direction TB
+
+    %% ==================== Core Model ====================
+    class Envelope {
+        <<immutable>>
+        -String id
+        -String source
+        -String type
+        -Instant time
+        -String subject
+        -JsonNode data
+        -Map~String,String~ headers
+        -SourceMeta sourceMeta
+        +withData(JsonNode) Envelope
+        +withHeader(String, String) Envelope
+        +builder() Builder
+    }
+
+    class SourceMeta {
+        <<record>>
+        +String topic
+        +int partition
+        +long offset
+    }
+
+    class RouteKey {
+        <<record>>
+        +String table
+        +String operation
+        +matches(RouteKey pattern) boolean
+        +parse(String expr)$ RouteKey
+    }
+
+    class Destination {
+        <<record>>
+        +String channel
+        +String target
+        +Object payload
+    }
+
+    class ProcessingResult {
+        <<sealed interface>>
+    }
+
+    class Success {
+        <<record>>
+        +List~Destination~ outputs
+    }
+
+    class Filtered {
+        <<record>>
+        +String reason
+    }
+
+    class Failed {
+        <<record>>
+        +Throwable cause
+        +boolean retryable
+    }
+
+    ProcessingResult <|.. Success
+    ProcessingResult <|.. Filtered
+    ProcessingResult <|.. Failed
+    Envelope *-- SourceMeta
+    Success *-- Destination
+
+    %% ==================== Port Interfaces ====================
+    class InboundPort {
+        <<interface>>
+        +start() void
+        +stop() void
+    }
+
+    class OutboundPort {
+        <<interface>>
+        +channel() String
+        +publish(Destination) void
+    }
+
+    class EventHandler {
+        <<interface / FunctionalInterface>>
+        +handle(Envelope) ProcessingResult
+    }
+
+    class PipelineStep {
+        <<interface / FunctionalInterface>>
+        +process(Envelope) Envelope
+    }
+
+    %% ==================== Routing ====================
+    class Router {
+        <<interface>>
+        +route(Envelope) RouteKey
+    }
+
+    class HeaderBasedRouter {
+        +route(Envelope) RouteKey
+    }
+
+    Router <|.. HeaderBasedRouter
+
+    class PipelineDefinition {
+        <<record>>
+        +String routeKeyPattern
+        +boolean ordered
+        +String orderKeyExpr
+        +EventHandler handler
+        +List~PipelineStep~ preSteps
+    }
+
+    class PipelineRegistry {
+        -List~PipelineDefinition~ pipelines
+        +register(PipelineDefinition) void
+        +resolve(RouteKey) List~PipelineDefinition~
+    }
+
+    PipelineDefinition o-- EventHandler
+    PipelineDefinition o-- PipelineStep
+    PipelineRegistry "1" *-- "*" PipelineDefinition
+
+    %% ==================== Dispatch ====================
+    class Dispatcher {
+        -ExecutorService[] orderedWorkers
+        -ExecutorService concurrentPool
+        +dispatch(Envelope, PipelineDefinition, OffsetTracker) CompletableFuture
+        +shutdown(Duration) void
+        +orderedWorkerQueueSizes() Map
+        -executePipeline(Envelope, PipelineDefinition, OffsetTracker) ProcessingResult
+        -resolveOrderKey(Envelope, String) String
+    }
+
+    class OffsetTracker {
+        -ConcurrentSkipListMap~Long,AtomicInteger~ window
+        +register(long offset, int pipelineCount) void
+        +complete(long offset) void
+        +committableOffset() OptionalLong
+        +inflightCount() int
+        +awaitDrain(Duration) void
+        +oldestPendingAge() Duration
+        +oldestPendingOffset() long
+    }
+
+    class BackpressureController {
+        -int highWaterMark
+        -int lowWaterMark
+        +evaluate(int inflight) Action
+    }
+
+    class Action {
+        <<enum>>
+        PAUSE
+        RESUME
+        NONE
+    }
+
+    BackpressureController --> Action
+    Dispatcher --> OffsetTracker : complete()
+    Dispatcher --> PipelineDefinition : execute
+
+    %% ==================== Idempotent ====================
+    class IdempotentFilter {
+        <<interface / SPI>>
+        +isDuplicate(Envelope) boolean
+        +deduplicationKey(Envelope) String
+    }
+
+    class CaffeineIdempotentFilter {
+        -Cache~String,Boolean~ cache
+        +isDuplicate(Envelope) boolean
+    }
+
+    class RedisIdempotentFilter {
+        <<future>>
+        +isDuplicate(Envelope) boolean
+    }
+
+    IdempotentFilter <|.. CaffeineIdempotentFilter
+    IdempotentFilter <|.. RedisIdempotentFilter
+
+    %% ==================== Outbound ====================
+    class CompositeOutboundPublisher {
+        -Map~String,OutboundPort~ ports
+        +publish(List~Destination~) void
+    }
+
+    class DltPublisher {
+        +sendToDlt(ConsumerRecord, Throwable) void
+    }
+
+    CompositeOutboundPublisher "1" o-- "*" OutboundPort
+
+    %% ==================== Kafka Adapter ====================
+    class KafkaInboundAdapter {
+        -KafkaConsumer consumer
+        -EnvelopeConverter converter
+        -Router router
+        -PipelineRegistry registry
+        -Dispatcher dispatcher
+        -BackpressureController backpressure
+        -Map~TopicPartition,OffsetTracker~ trackers
+        -Set~TopicPartition~ pausedPartitions
+        -volatile boolean running
+        +start() void
+        +stop() void
+        -run() void
+        -checkBackpressure() void
+        -commitCompletedOffsets() void
+    }
+
+    class KafkaOutboundAdapter {
+        -KafkaProducer producer
+        +channel() String
+        +publish(Destination) void
+    }
+
+    class EnvelopeConverter {
+        +convert(ConsumerRecord) Envelope
+    }
+
+    InboundPort <|.. KafkaInboundAdapter
+    OutboundPort <|.. KafkaOutboundAdapter
+
+    KafkaInboundAdapter --> EnvelopeConverter
+    KafkaInboundAdapter --> Router
+    KafkaInboundAdapter --> PipelineRegistry
+    KafkaInboundAdapter --> Dispatcher
+    KafkaInboundAdapter --> BackpressureController
+    KafkaInboundAdapter --> IdempotentFilter
+    KafkaInboundAdapter --> DltPublisher
+    KafkaInboundAdapter "1" *-- "*" OffsetTracker
+
+    Dispatcher --> CompositeOutboundPublisher : publish on success
+
+    %% ==================== Test Support ====================
+    class MockInboundPort {
+        +send(Envelope) ProcessingResult
+    }
+
+    class CaptureOutboundPort {
+        -List~Destination~ captured
+        +channel() String
+        +publish(Destination) void
+        +getCaptured() List
+        +reset() void
+    }
+
+    InboundPort <|.. MockInboundPort
+    OutboundPort <|.. CaptureOutboundPort
+
+    %% ==================== Spring Boot ====================
+    class EventFlowAutoConfiguration {
+        <<@AutoConfiguration>>
+        +router() Router
+        +idempotentFilter() IdempotentFilter
+        +pipelineRegistry() PipelineRegistry
+        +dispatcher() Dispatcher
+        +outboundPublisher() CompositeOutboundPublisher
+        +kafkaInbound() KafkaInboundAdapter
+    }
+
+    class EventFlowRegistrar {
+        <<SmartInitializingSingleton>>
+        +afterSingletonsInstantiated() void
+    }
+
+    class EventFlowProperties {
+        <<@ConfigurationProperties>>
+        +kafka: KafkaProps
+        +dispatch: DispatchProps
+        +backpressure: BackpressureProps
+        +idempotent: IdempotentProps
+        +shutdown: ShutdownProps
+    }
+
+    EventFlowAutoConfiguration --> EventFlowRegistrar
+    EventFlowAutoConfiguration --> EventFlowProperties
+
+    %% ==================== Annotation ====================
+    class EventPipeline_Annotation {
+        <<@annotation>>
+        +routeKey() String
+        +ordered() boolean
+        +orderKeyExpr() String
+    }
+
+    EventFlowRegistrar --> EventPipeline_Annotation : scans
+
+    %% ==================== Observability ====================
+    class TracingPipelineDecorator {
+        -PipelineStep delegate
+        -Tracer tracer
+        +process(Envelope) Envelope
+    }
+
+    PipelineStep <|.. TracingPipelineDecorator
+    TracingPipelineDecorator o-- PipelineStep : wraps

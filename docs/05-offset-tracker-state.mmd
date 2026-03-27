@@ -1,0 +1,37 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '13px'}}}%%
+stateDiagram-v2
+    direction LR
+
+    state "OffsetTracker Window (per Partition)" as WINDOW {
+
+        state "offset=100<br/>refCount=0" as O100
+        state "offset=101<br/>refCount=0" as O101
+        state "offset=102<br/>refCount=2 ⏳" as O102
+        state "offset=103<br/>refCount=0" as O103
+        state "offset=104<br/>refCount=1 ⏳" as O104
+        state "offset=105<br/>refCount=3 ⏳" as O105
+
+        [*] --> O100
+        O100 --> O101
+        O101 --> O102
+        O102 --> O103
+        O103 --> O104
+        O104 --> O105
+    }
+
+    state "committableOffset() scan" as SCAN {
+        state "100: refCount=0 ✅ remove" as S1
+        state "101: refCount=0 ✅ remove" as S2
+        state "102: refCount=2 ❌ STOP" as S3
+
+        [*] --> S1
+        S1 --> S2
+        S2 --> S3
+    }
+
+    state "Result" as RESULT {
+        state "committable = 102<br/>(=101+1, Kafka commit semantics)<br/><br/>inflight = 4<br/>(offsets 102,103,104,105 remain)" as R1
+    }
+
+    WINDOW --> SCAN : poll thread calls
+    SCAN --> RESULT : returns

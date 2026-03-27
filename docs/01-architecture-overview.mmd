@@ -1,0 +1,143 @@
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#4A90D9', 'primaryTextColor': '#fff', 'primaryBorderColor': '#2E6BA6', 'lineColor': '#5C6BC0', 'secondaryColor': '#E8F5E9', 'tertiaryColor': '#FFF3E0', 'background': '#FAFAFA', 'fontSize': '14px'}}}%%
+graph TB
+    subgraph EXTERNAL_IN ["<b>External Data Sources</b>"]
+        direction LR
+        OB["OceanBase<br/>CDC"]
+        KAFKA_SRC[("Kafka Broker<br/>(CDC Topics)")]
+        HTTP_CLIENT["HTTP Client<br/>(Future)"]
+        OB -->|binlog sync| KAFKA_SRC
+    end
+
+    subgraph INBOUND_ADAPTERS ["<b>Inbound Adapters (Driving Side)</b>"]
+        direction LR
+        KIA["<b>KafkaInboundAdapter</b><br/>- consumer.poll()<br/>- pause / resume backpressure<br/>- poison msg → DLT<br/>- offset commit"]
+        HIA["<b>HttpInboundAdapter</b><br/>(P2 phase)"]
+        TIA["<b>TestInboundAdapter</b><br/>(MockInboundPort)"]
+    end
+
+    subgraph CORE_ENGINE ["<b>Core Engine (Domain / Hexagon Center)</b>"]
+        direction TB
+
+        subgraph INGRESS ["Ingress Pipeline"]
+            direction LR
+            EC["<b>EnvelopeConverter</b><br/>RawMessage → Envelope<br/>(lenient JSON)"]
+            IF["<b>IdempotentFilter</b><br/>table+pk+ts dedup<br/>(Caffeine / Redis SPI)"]
+            RT["<b>Router</b><br/>Envelope → RouteKey<br/>(HeaderBased default)"]
+            EC --> IF --> RT
+        end
+
+        subgraph DISPATCH ["Dispatch & Concurrency Control"]
+            direction TB
+            PR["<b>PipelineRegistry</b><br/>RouteKey → List&lt;PipelineDef&gt;<br/>(fan-out support)"]
+            DISP["<b>Dispatcher</b><br/>dual-mode dispatch"]
+
+            subgraph ORDERED ["Ordered Mode"]
+                direction LR
+                W0["Worker 0<br/>(SingleThread)"]
+                W1["Worker 1<br/>(SingleThread)"]
+                WN["Worker N<br/>(SingleThread)"]
+            end
+
+            subgraph CONCURRENT ["Concurrent Mode"]
+                POOL["SharedThreadPool<br/>(unbounded queue,<br/>backpressure via pause/resume)"]
+            end
+
+            PR --> DISP
+            DISP -->|"hash(table+pk) % N"| ORDERED
+            DISP -->|"direct submit"| CONCURRENT
+        end
+
+        subgraph TRACKING ["Offset & Backpressure"]
+            direction LR
+            OT["<b>OffsetTracker</b><br/>- per partition<br/>- ref-counted window<br/>- committable watermark<br/>- stall detection"]
+            BP["<b>BackpressureController</b><br/>inflight ≥ high → pause<br/>inflight ≤ low → resume"]
+            OT <--> BP
+        end
+
+        subgraph PIPELINE_EXEC ["Pipeline Execution"]
+            direction LR
+            STEPS["<b>PipelineSteps</b><br/>filter → transform → enrich"]
+            HANDLER["<b>EventHandler</b><br/>(Business Logic)<br/>→ ProcessingResult"]
+            STEPS --> HANDLER
+        end
+
+        subgraph RESULT ["Result Handling"]
+            direction LR
+            RS["Success<br/>→ List&lt;Destination&gt;"]
+            RF["Filtered<br/>→ skip + complete"]
+            RX["Failed<br/>→ DLT (if DLT ok → complete;<br/>  if DLT fail → stall window)"]
+        end
+
+        RT --> PR
+        ORDERED --> PIPELINE_EXEC
+        CONCURRENT --> PIPELINE_EXEC
+        PIPELINE_EXEC --> RESULT
+    end
+
+    subgraph OUTBOUND_ADAPTERS ["<b>Outbound Adapters (Driven Side)</b>"]
+        direction LR
+        KOA["<b>KafkaOutboundAdapter</b>"]
+        HOA["<b>HttpOutboundAdapter</b><br/>(Future)"]
+        LOA["<b>LogOutboundAdapter</b><br/>(Debug)"]
+        DLT["<b>DltPublisher</b><br/>Dead Letter Topic"]
+    end
+
+    subgraph EXTERNAL_OUT ["<b>External Destinations</b>"]
+        direction LR
+        KAFKA_DST[("Kafka Broker<br/>(Output Topics)")]
+        KAFKA_DLT[("Kafka Broker<br/>(DLT Topics)")]
+        EXT_API["External API<br/>(Future)"]
+    end
+
+    subgraph OBSERVABILITY ["<b>Observability (Cross-cutting)</b>"]
+        direction LR
+        OTEL["OpenTelemetry<br/>Tracing + Metrics"]
+        METER["Micrometer<br/>inflight / duration / errors<br/>queue depth / pause count<br/>dlt count / dedup hits"]
+        MDC_T["MDC<br/>traceId injection"]
+    end
+
+    %% Data flow connections
+    KAFKA_SRC --> KIA
+    HTTP_CLIENT -.-> HIA
+    KIA --> EC
+    HIA -.-> EC
+    TIA -.-> EC
+
+    RS --> KOA
+    RS --> HOA
+    RS --> LOA
+    RX --> DLT
+
+    KOA --> KAFKA_DST
+    DLT --> KAFKA_DLT
+    HOA -.-> EXT_API
+
+    %% Tracking connections
+    KIA <-->|"register / committable / pause-resume"| TRACKING
+
+    ORDERED -->|"complete(offset)"| OT
+    CONCURRENT -->|"complete(offset)"| OT
+
+    %% Observability
+    PIPELINE_EXEC -.-> OTEL
+    TRACKING -.-> METER
+    DISP -.-> METER
+
+    %% Styling
+    classDef adapterIn fill:#4A90D9,stroke:#2E6BA6,color:#fff,stroke-width:2px
+    classDef adapterOut fill:#66BB6A,stroke:#388E3C,color:#fff,stroke-width:2px
+    classDef coreComp fill:#FF8A65,stroke:#E64A19,color:#fff,stroke-width:2px
+    classDef tracking fill:#AB47BC,stroke:#7B1FA2,color:#fff,stroke-width:2px
+    classDef pipeline fill:#FFA726,stroke:#EF6C00,color:#fff,stroke-width:2px
+    classDef result fill:#78909C,stroke:#455A64,color:#fff,stroke-width:1px
+    classDef external fill:#E0E0E0,stroke:#9E9E9E,color:#333,stroke-width:1px
+    classDef observe fill:#4DD0E1,stroke:#00838F,color:#fff,stroke-width:1px
+
+    class KIA,HIA,TIA adapterIn
+    class KOA,HOA,LOA,DLT adapterOut
+    class EC,IF,RT,PR,DISP coreComp
+    class OT,BP tracking
+    class W0,W1,WN,POOL,STEPS,HANDLER pipeline
+    class RS,RF,RX result
+    class OB,KAFKA_SRC,HTTP_CLIENT,KAFKA_DST,KAFKA_DLT,EXT_API external
+    class OTEL,METER,MDC_T observe

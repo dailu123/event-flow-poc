@@ -1,0 +1,41 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '13px'}}}%%
+graph TD
+    subgraph LIFECYCLE ["Backpressure State Machine (per Partition)"]
+        direction TB
+
+        NORMAL["<b>RUNNING</b><br/>consumer.resume()<br/>poll returns records<br/>inflight < highWater"]
+
+        PAUSED["<b>PAUSED</b><br/>consumer.pause()<br/>poll returns empty<br/>workers draining"]
+
+        NORMAL -->|"inflight >= highWater<br/>(e.g. 1000)"| PAUSED
+        PAUSED -->|"inflight <= lowWater<br/>(e.g. 500)"| NORMAL
+    end
+
+    subgraph TIMELINE ["Inflight Count Over Time"]
+        direction LR
+
+        T1["t0: inflight=0<br/>📗 RUNNING"]
+        T2["t1: inflight=600<br/>📗 RUNNING"]
+        T3["t2: inflight=1000<br/>📕 → PAUSE"]
+        T4["t3: inflight=800<br/>📕 still PAUSED<br/>(hysteresis)"]
+        T5["t4: inflight=500<br/>📗 → RESUME"]
+        T6["t5: inflight=300<br/>📗 RUNNING"]
+
+        T1 --> T2 --> T3 --> T4 --> T5 --> T6
+    end
+
+    subgraph WHY ["Why Hysteresis (High/Low Gap)?"]
+        direction TB
+        W1["Without gap: pause at 1000, resume at 999<br/>→ rapid pause/resume oscillation (thrashing)"]
+        W2["With gap: pause at 1000, resume at 500<br/>→ stable state transitions, smooth throughput"]
+    end
+
+    classDef running fill:#66BB6A,stroke:#388E3C,color:#fff,stroke-width:2px
+    classDef paused fill:#EF5350,stroke:#C62828,color:#fff,stroke-width:2px
+    classDef info fill:#E3F2FD,stroke:#1565C0,color:#333,stroke-width:1px
+
+    class NORMAL running
+    class PAUSED paused
+    class T1,T2,T5,T6 running
+    class T3,T4 paused
+    class W1,W2 info

@@ -1,0 +1,146 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '13px'}, 'sequence': {'mirrorActors': false, 'messageAlign': 'center', 'width': 280}}}%%
+sequenceDiagram
+    autonumber
+
+    participant KB as Kafka Broker
+    participant PT as Poll Thread<br/>(KafkaInboundAdapter)
+    participant OT as OffsetTracker<br/>(per Partition)
+    participant BP as Backpressure<br/>Controller
+    participant DISP as Dispatcher
+    participant OW as Ordered Worker[i]<br/>(SingleThreadExecutor)
+    participant CW as Concurrent Pool<br/>(SharedThreadPool)
+    participant PL as Pipeline<br/>(Steps + Handler)
+    participant OUT as OutboundPublisher
+    participant DLT as DLT Publisher
+
+    rect rgb(240, 248, 255)
+        Note over PT,BP: === Phase 1: Backpressure Check (every poll cycle) ===
+        PT->>OT: inflightCount(partition)
+        OT-->>PT: count = 1200
+        PT->>BP: evaluate(count, high=1000, low=500)
+        BP-->>PT: ACTION: PAUSE
+        PT->>KB: consumer.pause(partition)
+        Note over KB,PT: partition paused, poll returns empty
+
+        Note over PT,BP: ... Workers drain messages ...
+
+        PT->>OT: inflightCount(partition)
+        OT-->>PT: count = 480
+        PT->>BP: evaluate(count, high=1000, low=500)
+        BP-->>PT: ACTION: RESUME
+        PT->>KB: consumer.resume(partition)
+    end
+
+    rect rgb(255, 253, 240)
+        Note over KB,DLT: === Phase 2: Poll + Deserialize + Route ===
+        PT->>KB: consumer.poll(100ms)
+        KB-->>PT: ConsumerRecords (batch)
+
+        loop for each ConsumerRecord
+            PT->>PT: EnvelopeConverter.convert(record)
+            alt Poison message (parse failure)
+                PT->>DLT: sendToDlt(record, error)
+                PT->>OT: register(offset, count=1) + complete(offset)
+                Note over PT: skip to next record
+            end
+
+            PT->>PT: IdempotentFilter.isDuplicate(envelope)
+            alt Duplicate detected
+                PT->>OT: register(offset, count=1) + complete(offset)
+                Note over PT: skip to next record
+            end
+
+            PT->>PT: Router.route(envelope) → RouteKey
+            PT->>PT: PipelineRegistry.resolve(routeKey) → List[N pipelines]
+
+            alt No pipeline matched
+                PT->>OT: register(offset, count=1) + complete(offset)
+            else N pipelines matched (fan-out)
+                PT->>OT: register(offset, count=N)
+                Note over OT: window[offset] = AtomicInteger(N)
+            end
+        end
+    end
+
+    rect rgb(232, 245, 233)
+        Note over DISP,CW: === Phase 3A: Ordered Mode Dispatch ===
+        Note over DISP: pipeline.ordered() == true
+        PT->>DISP: dispatch(envelope, pipeline, tracker)
+        DISP->>DISP: orderKey = hash(table + pk)
+        DISP->>DISP: slot = orderKey % N
+        DISP->>OW: submit to Worker[slot]
+        Note over OW: Same PK always → same Worker<br/>(guarantees local ordering)
+
+        OW->>PL: steps.filter → transform → enrich
+        PL->>PL: handler.handle(envelope)
+        alt Success
+            PL-->>OW: ProcessingResult.Success(destinations)
+            OW->>OUT: publish(destinations)
+            Note over OUT: Must succeed BEFORE complete
+            OUT-->>OW: ack
+            OW->>OT: complete(offset)
+            Note over OT: refCount.decrementAndGet()
+        else Filtered
+            PL-->>OW: ProcessingResult.Filtered(reason)
+            OW->>OT: complete(offset)
+        else Failed
+            PL-->>OW: ProcessingResult.Failed(cause)
+            OW->>DLT: sendToDlt(record, cause)
+            alt DLT success
+                DLT-->>OW: ack
+                OW->>OT: complete(offset)
+            else DLT also failed
+                Note over OW,OT: DO NOT complete!<br/>Window stalls → inflight grows<br/>→ triggers pause + alert
+            end
+        end
+    end
+
+    rect rgb(243, 229, 245)
+        Note over DISP,CW: === Phase 3B: Concurrent Mode Dispatch ===
+        Note over DISP: pipeline.ordered() == false
+        PT->>DISP: dispatch(envelope, pipeline, tracker)
+        DISP->>CW: submit to SharedPool (any thread)
+        Note over CW: Max throughput, no ordering guarantee
+
+        CW->>PL: steps.filter → transform → enrich
+        PL->>PL: handler.handle(envelope)
+        PL-->>CW: ProcessingResult
+        CW->>OUT: publish (if Success)
+        CW->>OT: complete(offset)
+    end
+
+    rect rgb(255, 243, 224)
+        Note over PT,OT: === Phase 4: Offset Commit (every N seconds) ===
+        PT->>OT: committableOffset()
+        Note over OT: Scan window from lowest offset:<br/>offset=100 refCount=0 → DONE, remove<br/>offset=101 refCount=0 → DONE, remove<br/>offset=102 refCount=2 → PENDING, STOP!<br/>→ committable = 102 (=101+1)
+        OT-->>PT: OptionalLong(102)
+        PT->>KB: commitSync({partition → offset 102})
+        Note over KB: Broker persists committed offset
+    end
+
+    rect rgb(255, 235, 238)
+        Note over PT,OT: === Phase 5: Graceful Shutdown ===
+        Note over PT: JVM shutdown hook / Spring Lifecycle.stop()
+        PT->>KB: consumer.pause(ALL partitions)
+        PT->>PT: running = false (exit poll loop)
+        PT->>DISP: shutdown(timeout=30s)
+        Note over OW,CW: Drain all queued tasks...
+        DISP-->>PT: all workers terminated
+        PT->>OT: committableOffset() (final commit)
+        PT->>KB: commitSync(final offsets)
+        PT->>KB: consumer.close()
+        Note over PT: Spring container proceeds to destroy
+    end
+
+    rect rgb(252, 228, 228)
+        Note over PT,OT: === Phase 6: Rebalance Handling ===
+        Note over KB: Rebalance triggered (new consumer joins)
+        KB->>PT: onPartitionsRevoked([P0, P1])
+        PT->>OT: awaitDrain(P0, timeout=10s)
+        Note over OT: Block until P0 window is empty<br/>(all in-flight messages completed)
+        PT->>OT: committableOffset(P0) → final offset
+        PT->>KB: commitSync({P0 → final offset})
+        PT->>PT: remove tracker(P0), clear pause state(P0)
+        KB->>PT: onPartitionsAssigned([P2, P3])
+        Note over PT: New trackers created lazily on next poll
+    end

@@ -1,0 +1,40 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '13px'}}}%%
+graph BT
+    subgraph FRAMEWORK ["EventFlow Framework (Published to Nexus)"]
+        direction BT
+
+        CORE["<b>eventflow-core</b><br/><br/>Envelope / RouteKey / ProcessingResult<br/>Router / PipelineRegistry / Pipeline<br/>Dispatcher / OffsetTracker / Backpressure<br/>IdempotentFilter SPI / OutboundPort SPI<br/>EventHandler / PipelineStep / @EventPipeline<br/><br/><i>Dependencies: slf4j-api, jackson-core<br/>Optional: opentelemetry-api, micrometer-core</i>"]
+
+        KAFKA["<b>eventflow-kafka</b><br/><br/>KafkaInboundAdapter<br/>KafkaOutboundAdapter<br/>EnvelopeConverter (CDC JSON)<br/>DltPublisher<br/>RebalanceHandler<br/><br/><i>Dependencies: kafka-clients</i>"]
+
+        STARTER["<b>eventflow-spring-boot-starter</b><br/><br/>EventFlowAutoConfiguration<br/>EventFlowProperties<br/>EventFlowRegistrar<br/>ConditionalOnClass wiring<br/><br/><i>Dependencies: spring-boot-autoconfigure</i>"]
+
+        TEST["<b>eventflow-test</b><br/><br/>@EventProcessingTest<br/>MockInboundPort<br/>CaptureOutboundPort<br/>EnvelopeFixtures<br/><br/><i>Dependencies: spring-boot-test<br/>junit5, assertj</i>"]
+
+        KAFKA -->|"implements InboundPort<br/>implements OutboundPort"| CORE
+        STARTER -->|"auto-configures"| CORE
+        STARTER -->|"conditional on classpath"| KAFKA
+        TEST -->|"mocks ports from"| CORE
+    end
+
+    subgraph BUSINESS ["Business Application (e.g. order-sync-service)"]
+        direction TB
+
+        APP["<b>order-sync-service</b><br/><br/>OrderCdcHandler<br/>PaymentCdcHandler<br/>application.yml<br/><br/><i>Only depends on starter + test</i>"]
+    end
+
+    APP -->|"compile<br/>(only dependency needed)"| STARTER
+    APP -.->|"test scope"| TEST
+
+    %% Styling
+    classDef core fill:#FF8A65,stroke:#E64A19,color:#fff,stroke-width:2px
+    classDef adapter fill:#4A90D9,stroke:#2E6BA6,color:#fff,stroke-width:2px
+    classDef starter fill:#66BB6A,stroke:#388E3C,color:#fff,stroke-width:2px
+    classDef test fill:#AB47BC,stroke:#7B1FA2,color:#fff,stroke-width:2px
+    classDef business fill:#FFA726,stroke:#EF6C00,color:#fff,stroke-width:2px
+
+    class CORE core
+    class KAFKA adapter
+    class STARTER starter
+    class TEST test
+    class APP business
