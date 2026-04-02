@@ -4,37 +4,42 @@
 
 ```mermaid
 flowchart LR
-    LT[Load Test / 业务请求\n/api/poc/load-test] --> P[Producer\n(eventflow-sample)]
-    P --> K[(Kafka Topic\nt-poc-events)]
+  LT[Load Test API] --> PROD[Producer]
+  PROD --> KAFKA[(Kafka Topic: t-poc-events)]
 
-    K --> C_A[Consumer 实例 A\nport=8080\nstrategy-a=true\nstrategy-b=false\ngroup-id=A]
-    K --> C_B[Consumer 实例 B\nport=8081\nstrategy-a=false\nstrategy-b=true\ngroup-id=B]
+  KAFKA --> A_CONS[Consumer A]
+  KAFKA --> B_CONS[Consumer B]
 
-    subgraph A_Path[Strategy A: Direct]
-      C_A --> A1[PocDirectHandler]
-      A1 --> A2[业务处理]
-      A2 --> A3[完成]
-    end
+  subgraph A_APP[Instance A : port 8080]
+    A_POLL[Kafka Poll Thread] --> A_DISP[Dispatcher]
+    A_DISP --> A_POOL[Concurrent Pool: poc-A threads]
+    A_POOL --> A_HDL[PocDirectHandler]
+    A_HDL --> A_BIZ[Business Logic]
+  end
+  A_CONS --> A_POLL
 
-    subgraph B_Path[Strategy B: Store + Process]
-      C_B --> B1[PocStoredHandler\n按 Kafka poll 批次同步落库]
-      B1 --> DB[(PostgreSQL\nevent_store)]
-      DB --> B2[PocEventProcessor Scheduler\n批量拉取 PENDING]
-      B2 --> B3[业务处理]
-      B3 --> B4[批量更新 DONE]
-      B4 --> DB
-    end
+  subgraph B_APP[Instance B : port 8081]
+    B_POLL[Kafka Poll Thread] --> B_DISP[Dispatcher]
+    B_DISP --> B_POOL[Concurrent Pool: poc-B threads]
+    B_POOL --> B_STORE[PocStoredHandler]
+    B_STORE --> DB[(PostgreSQL event_store)]
+    B_SCH[Scheduler Thread] --> B_FETCH[find pending batch]
+    B_FETCH --> DB
+    B_FETCH --> B_PROC[Process batch]
+    B_PROC --> B_DONE[mark processed batch]
+    B_DONE --> DB
+  end
+  B_CONS --> B_POLL
 
-    C_A --> M1[/Actuator Prometheus\n:8080/]
-    C_B --> M2[/Actuator Prometheus\n:8081/]
+  A_APP --> A_METRICS[/Actuator Prometheus :8080/]
+  B_APP --> B_METRICS[/Actuator Prometheus :8081/]
+  A_METRICS --> PROM[(Prometheus)]
+  B_METRICS --> PROM
+  PROM --> GRAF[(Grafana)]
 
-    M1 --> PR[(Prometheus)]
-    M2 --> PR
-    PR --> GF[(Grafana Dashboard)]
-
-    C_A -. traces .-> TP[(Tempo)]
-    C_B -. traces .-> TP
-    GF -. trace explore links .-> TP
+  A_APP -. traces .-> TEMPO[(Tempo)]
+  B_APP -. traces .-> TEMPO
+  GRAF -. trace explore links .-> TEMPO
 ```
 
 ## 2) 对比口径（本次测试）
@@ -53,4 +58,3 @@ flowchart LR
 - A/B 吞吐：`poc_events_processed_total`（配合 `increase/rate`）
 - B DB 操作次数：`poc_db_operation_total{strategy="B"}`
 - B DB 操作耗时：`poc_db_operation_duration_seconds_{sum,count,bucket}{strategy="B"}`
-
