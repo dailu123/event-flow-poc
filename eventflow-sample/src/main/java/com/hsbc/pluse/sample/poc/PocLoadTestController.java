@@ -1,6 +1,8 @@
 package com.hsbc.pluse.sample.poc;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hsbc.pluse.observe.EventFlowTracer;
+import io.opentelemetry.api.trace.Span;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
@@ -41,12 +43,14 @@ public class PocLoadTestController {
 
     private final EventStoreRepository repository;
     private final PocRuntimeTuning runtimeTuning;
+    private final EventFlowTracer tracer;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AtomicInteger runningTests = new AtomicInteger(0);
 
-    public PocLoadTestController(EventStoreRepository repository, PocRuntimeTuning runtimeTuning) {
+    public PocLoadTestController(EventStoreRepository repository, PocRuntimeTuning runtimeTuning, EventFlowTracer tracer) {
         this.repository = repository;
         this.runtimeTuning = runtimeTuning;
+        this.tracer = tracer;
     }
 
     @PostMapping("/load-test")
@@ -159,32 +163,54 @@ public class PocLoadTestController {
                     for (int i = startIdx; i < endIdx; i++) {
                         String eventId = "E-" + i;
                         int amount = random.nextInt(50000);
-                        long sendTimestamp = System.currentTimeMillis();
-
-                        Map<String, Object> message = new LinkedHashMap<>();
-                        message.put("table", "t_poc");
-                        message.put("op", "INSERT");
-                        message.put("pk", eventId);
-                        message.put("data", Map.of(
-                            "amount", amount,
-                            "timestamp", sendTimestamp,
-                            "sendTimestamp", sendTimestamp
-                        ));
 
                         try {
-                            byte[] payload = objectMapper.writeValueAsBytes(message);
-                            long sendStart = System.nanoTime();
-                            if (waitAck) {
-                                Future<RecordMetadata> future = producer.send(new ProducerRecord<>(TOPIC, eventId, payload));
-                                future.get();
-                                totalSendLatencyNanos.addAndGet(System.nanoTime() - sendStart);
-                            } else {
-                                producer.send(new ProducerRecord<>(TOPIC, eventId, payload), (metadata, ex) -> {
-                                    if (ex != null) {
-                                        errors.incrementAndGet();
+                            tracer.tracedProducer("poc.kafka.send", "t_poc", eventId, TOPIC, () -> {
+                                Span.current().setAttribute("poc.phase", "send");
+                                Span.current().setAttribute("poc.component", "producer");
+                                Span.current().setAttribute("poc.load.threadId", threadId);
+                                Span.current().setAttribute("poc.load.waitAck", waitAck);
+
+                                long sendTimestamp = System.currentTimeMillis();
+                                String sendTraceId = Span.current().getSpanContext().getTraceId();
+                                String sendSpanId = Span.current().getSpanContext().getSpanId();
+
+                                Map<String, Object> data = new LinkedHashMap<>();
+                                data.put("amount", amount);
+                                data.put("timestamp", sendTimestamp);
+                                data.put("sendTimestamp", sendTimestamp);
+                                data.put("sendTraceId", sendTraceId);
+                                data.put("sendSpanId", sendSpanId);
+                                data.put("producerTopic", TOPIC);
+                                data.put("producerThreadId", threadId);
+
+                                Map<String, Object> message = new LinkedHashMap<>();
+                                message.put("table", "t_poc");
+                                message.put("op", "INSERT");
+                                message.put("pk", eventId);
+                                message.put("data", data);
+
+                                try {
+                                    byte[] payload = objectMapper.writeValueAsBytes(message);
+                                    long sendStart = System.nanoTime();
+                                    if (waitAck) {
+                                        Future<RecordMetadata> future = producer.send(new ProducerRecord<>(TOPIC, eventId, payload));
+                                        future.get();
+                                        long sendLatencyNanos = System.nanoTime() - sendStart;
+                                        Span.current().setAttribute("poc.sendAckLatencyMs", sendLatencyNanos / 1_000_000.0);
+                                        totalSendLatencyNanos.addAndGet(sendLatencyNanos);
+                                    } else {
+                                        producer.send(new ProducerRecord<>(TOPIC, eventId, payload), (metadata, ex) -> {
+                                            if (ex != null) {
+                                                errors.incrementAndGet();
+                                            }
+                                        });
                                     }
-                                });
-                            }
+                                } catch (Exception sendEx) {
+                                    throw new RuntimeException("send failed for " + eventId, sendEx);
+                                }
+                                return null;
+                            });
                         } catch (Exception e) {
                             errors.incrementAndGet();
                             log.error("Failed to send event {}", eventId, e);

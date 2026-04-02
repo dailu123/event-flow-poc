@@ -1,9 +1,11 @@
 package com.hsbc.pluse.sample.poc;
 
 import com.hsbc.pluse.model.Envelope;
+import com.hsbc.pluse.observe.EventFlowTracer;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import io.opentelemetry.api.trace.Span;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -21,11 +23,14 @@ public class EventStoreRepository {
     private final JdbcTemplate jdbcTemplate;
     private final PocRuntimeTuning runtimeTuning;
     private final MeterRegistry meterRegistry;
+    private final EventFlowTracer tracer;
 
-    public EventStoreRepository(JdbcTemplate jdbcTemplate, PocRuntimeTuning runtimeTuning, MeterRegistry meterRegistry) {
+    public EventStoreRepository(JdbcTemplate jdbcTemplate, PocRuntimeTuning runtimeTuning, MeterRegistry meterRegistry,
+                                EventFlowTracer tracer) {
         this.jdbcTemplate = jdbcTemplate;
         this.runtimeTuning = runtimeTuning;
         this.meterRegistry = meterRegistry;
+        this.tracer = tracer;
     }
 
     public void save(Envelope envelope, String traceId, String spanId, Long sendTimestamp) {
@@ -172,7 +177,7 @@ public class EventStoreRepository {
     private <T> T recordDbOperation(String operation, java.util.function.Supplier<T> supplier) {
         long startNanos = System.nanoTime();
         try {
-            return supplier.get();
+            return traceDbOperation(operation, supplier);
         } finally {
             long elapsedNanos = System.nanoTime() - startNanos;
             Timer.builder("poc.db.operation.duration")
@@ -188,6 +193,19 @@ public class EventStoreRepository {
                 .register(meterRegistry)
                 .increment();
         }
+    }
+
+    private <T> T traceDbOperation(String operation, java.util.function.Supplier<T> supplier) {
+        if (!Span.current().getSpanContext().isValid()) {
+            return supplier.get();
+        }
+        return tracer.tracedInternal("poc.db." + operation, () -> {
+            Span.current().setAttribute("poc.strategy", "B");
+            Span.current().setAttribute("poc.phase", "db");
+            Span.current().setAttribute("poc.component", "db");
+            Span.current().setAttribute("poc.db.operation", operation);
+            return supplier.get();
+        });
     }
 
     public record StoreCommand(

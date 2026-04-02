@@ -45,6 +45,20 @@ public class EventFlowTracer {
     }
 
     /**
+     * Creates a PRODUCER span with route_key/event_id/topic attributes.
+     */
+    public <T> T tracedProducer(String spanName, String routeKey, String eventId, String topic, Supplier<T> work) {
+        Span span = tracer.spanBuilder(spanName)
+                .setSpanKind(SpanKind.PRODUCER)
+                .setAttribute("eventflow.route_key", routeKey)
+                .setAttribute("eventflow.event_id", eventId)
+                .setAttribute("messaging.system", "kafka")
+                .setAttribute("messaging.destination", topic)
+                .startSpan();
+        return executeInSpan(span, work);
+    }
+
+    /**
      * Creates a child span under an explicit parent context (for cross-thread propagation).
      */
     public <T> T tracedChild(String spanName, Context parentContext, Supplier<T> work) {

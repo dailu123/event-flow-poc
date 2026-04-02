@@ -14,10 +14,12 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -72,45 +74,98 @@ public class PocEventProcessor {
             return;
         }
         try {
-        long delayMs = runtimeTuning.getSchedulerDelayMs();
-        long now = System.currentTimeMillis();
-        long last = lastRunAtMs.get();
-        if (now - last < delayMs) {
-            return;
-        }
-        if (!lastRunAtMs.compareAndSet(last, now)) {
-            return;
-        }
-
-        while (true) {
-            var pending = repository.findPending(batchSize);
-            if (pending.isEmpty()) {
+            long delayMs = runtimeTuning.getSchedulerDelayMs();
+            long now = System.currentTimeMillis();
+            long last = lastRunAtMs.get();
+            if (now - last < delayMs) {
+                return;
+            }
+            if (!lastRunAtMs.compareAndSet(last, now)) {
                 return;
             }
 
-            log.debug("Processing {} pending events from PostgreSQL", pending.size());
+            tracer.tracedInternal("poc.scheduler.tick", () -> {
+                Span.current().setAttribute("poc.strategy", "B");
+                Span.current().setAttribute("poc.phase", "scheduler");
+                Span.current().setAttribute("poc.component", "scheduler");
+                Span.current().setAttribute("poc.scheduler.delayMs", delayMs);
+                Span.current().setAttribute("poc.scheduler.batchSize", batchSize);
 
-            CompletableFuture<String>[] futures = pending.stream().map(entry ->
-                CompletableFuture.supplyAsync(() -> processEntry(entry), processPool)
-            ).toArray(CompletableFuture[]::new);
+                while (true) {
+                    final long fetchStartMs = System.currentTimeMillis();
+                    List<EventStoreEntry> pending = tracer.tracedInternal("poc.scheduler.fetchPending", () -> {
+                        Span.current().setAttribute("poc.strategy", "B");
+                        Span.current().setAttribute("poc.phase", "scheduler");
+                        Span.current().setAttribute("poc.component", "scheduler");
+                        return repository.findPending(batchSize);
+                    });
+                    final long fetchDurationMs = System.currentTimeMillis() - fetchStartMs;
+                    if (pending.isEmpty()) {
+                        return null;
+                    }
 
-            CompletableFuture.allOf(futures).join();
-            List<String> processedIds = Arrays.stream(futures)
-                .map(future -> future.getNow(null))
-                .filter(Objects::nonNull)
-                .toList();
-            repository.markProcessedBatch(processedIds);
+                    log.debug("Processing {} pending events from PostgreSQL", pending.size());
+                    Span.current().setAttribute("poc.scheduler.pendingBatchSize", pending.size());
 
-            if (processedIds.size() != pending.size()) {
-                log.warn("Batch processing completed with failures: total={}, success={}, failed={}",
-                    pending.size(), processedIds.size(), pending.size() - processedIds.size());
-            }
-            if (pending.size() < batchSize) {
-                return;
-            }
+                    CompletableFuture<String>[] futures = pending.stream().map(entry ->
+                        CompletableFuture.supplyAsync(() -> processEntry(entry), processPool)
+                    ).toArray(CompletableFuture[]::new);
 
-            log.debug("Batch reached size limit; continue processing next batch immediately");
-        }
+                    tracer.tracedInternal("poc.scheduler.awaitBatch", () -> {
+                        Span.current().setAttribute("poc.strategy", "B");
+                        Span.current().setAttribute("poc.phase", "scheduler");
+                        Span.current().setAttribute("poc.component", "scheduler");
+                        CompletableFuture.allOf(futures).join();
+                        return null;
+                    });
+
+                    List<String> processedIds = Arrays.stream(futures)
+                        .map(future -> future.getNow(null))
+                        .filter(Objects::nonNull)
+                        .toList();
+
+                    final long markStartMs = System.currentTimeMillis();
+                    tracer.tracedInternal("poc.scheduler.markProcessed", () -> {
+                        Span.current().setAttribute("poc.strategy", "B");
+                        Span.current().setAttribute("poc.phase", "scheduler");
+                        Span.current().setAttribute("poc.component", "scheduler");
+                        Span.current().setAttribute("poc.scheduler.processedBatchSize", processedIds.size());
+                        repository.markProcessedBatch(processedIds);
+                        return null;
+                    });
+                    final long markDurationMs = System.currentTimeMillis() - markStartMs;
+
+                    // Mirror batch-level scheduler/DB timing into each event trace tree so one traceId shows full lifecycle.
+                    Set<String> processedIdSet = new HashSet<>(processedIds);
+                    for (EventStoreEntry entry : pending) {
+                        if (!processedIdSet.contains(entry.id()) || entry.parentTraceId() == null || entry.parentSpanId() == null) {
+                            continue;
+                        }
+                        tracer.tracedWithLink("poc.scheduler.batch.finalize", "t_poc", entry.id(),
+                                entry.parentTraceId(), entry.parentSpanId(), () -> {
+                            Span.current().setAttribute("poc.strategy", "B");
+                            Span.current().setAttribute("poc.phase", "scheduler");
+                            Span.current().setAttribute("poc.component", "scheduler");
+                            Span.current().setAttribute("poc.scheduler.pendingBatchSize", pending.size());
+                            Span.current().setAttribute("poc.scheduler.processedBatchSize", processedIds.size());
+                            Span.current().setAttribute("poc.scheduler.fetchPendingDurationMs", fetchDurationMs);
+                            Span.current().setAttribute("poc.scheduler.markProcessedDurationMs", markDurationMs);
+                            Span.current().setAttribute("poc.scheduler.batchFinalize", true);
+                            return null;
+                        });
+                    }
+
+                    if (processedIds.size() != pending.size()) {
+                        log.warn("Batch processing completed with failures: total={}, success={}, failed={}",
+                            pending.size(), processedIds.size(), pending.size() - processedIds.size());
+                    }
+                    if (pending.size() < batchSize) {
+                        return null;
+                    }
+
+                    log.debug("Batch reached size limit; continue processing next batch immediately");
+                }
+            });
         } finally {
             processing.set(false);
         }
@@ -128,8 +183,12 @@ public class PocEventProcessor {
                 }
 
                 long storeDelayMs = Duration.between(entry.createdAt(), Instant.now()).toMillis();
+                long schedulerDelayMs = runtimeTuning.getSchedulerDelayMs();
+                long schedulerExcessDelayMs = Math.max(0, storeDelayMs - schedulerDelayMs);
                 Span.current().setAttribute("poc.storeDelayMs", storeDelayMs);
                 Span.current().setAttribute("poc.scheduler.queueDelayMs", storeDelayMs);
+                Span.current().setAttribute("poc.scheduler.configDelayMs", schedulerDelayMs);
+                Span.current().setAttribute("poc.scheduler.excessDelayMs", schedulerExcessDelayMs);
                 pocMetrics.recordStoreDelay(storeDelayMs);
 
                 tracer.tracedInternal("poc.business.process", () -> {

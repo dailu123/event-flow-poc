@@ -109,11 +109,20 @@
 
 ## Trace 链路追踪补充（A vs B）
 
+### 完整树 Trace（单 TraceId 全链路）
+![完整树Trace](./images/traceAll.png)
+
 ### A 策略 Trace（Direct）
 ![A策略Trace](./images/traceA.png)
 
 ### B 策略 Trace（Store + Process）
 ![B策略Trace](./images/traceB.png)
+
+### TraceAll 说明（单条链路完整树）
+
+1. `traceAll` 展示的是“单条消息一个 TraceId”的完整树视图：从 Kafka 发送（`poc.kafka.send`）出发，同时展开 A 与 B 两条处理分支。
+2. 在同一棵树中可以看到 B 的关键阶段：`poc.db.store`、`poc.strategyB.process`、`poc.scheduler.batch.finalize`、`poc.outbound.publish`。
+3. 这张图用于直观证明：B 相比 A 增加了 DB 与调度相关阶段，因此在 DB 网络延迟存在时，B 的整体链路耗时会被进一步拉长。
 
 ### Trace 证据结论
 
