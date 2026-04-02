@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Dual-mode dispatcher with full framework-level tracing.
@@ -46,6 +47,9 @@ public class Dispatcher {
 
     private final ExecutorService[] orderedWorkers;
     private final ExecutorService concurrentPool;
+    private final ConcurrentHashMap<String, ExecutorService> groupedConcurrentPools = new ConcurrentHashMap<>();
+    private final int concurrentCoreSize;
+    private final int concurrentMaxSize;
     private final CompositeOutboundPublisher outboundPublisher;
     private final MeterRegistry meterRegistry;
     private final EventFlowTracer tracer;       // nullable
@@ -63,6 +67,8 @@ public class Dispatcher {
         this.tracer = tracer;
         this.idempotentFilter = idempotentFilter;
         this.stats = stats;
+        this.concurrentCoreSize = config.getConcurrentCoreSize();
+        this.concurrentMaxSize = config.getConcurrentMaxSize();
 
         int orderedSlots = config.getOrderedWorkerCount();
         this.orderedWorkers = new ExecutorService[orderedSlots];
@@ -76,8 +82,8 @@ public class Dispatcher {
         }
 
         this.concurrentPool = new ThreadPoolExecutor(
-                config.getConcurrentCoreSize(),
-                config.getConcurrentMaxSize(),
+                concurrentCoreSize,
+                concurrentMaxSize,
                 60L, TimeUnit.SECONDS,
                 new LinkedBlockingQueue<>(),
                 new AtomicThreadFactory("ef-concurrent")
@@ -129,9 +135,10 @@ public class Dispatcher {
                     orderedWorkers[slot]
             );
         } else {
+            ExecutorService executor = resolveConcurrentExecutor(pipeline);
             return CompletableFuture.supplyAsync(
                     () -> executePipeline(envelope, pipeline, tracker, parentContext, dispatchTimeNanos),
-                    concurrentPool
+                    executor
             );
         }
     }
@@ -429,14 +436,58 @@ public class Dispatcher {
         log.info("Dispatcher shutting down, timeout={}s", timeout.toSeconds());
         for (ExecutorService w : orderedWorkers) { w.shutdown(); }
         concurrentPool.shutdown();
+        for (ExecutorService pool : groupedConcurrentPools.values()) {
+            pool.shutdown();
+        }
         try {
             for (ExecutorService w : orderedWorkers) {
                 w.awaitTermination(timeout.toMillis(), TimeUnit.MILLISECONDS);
             }
             concurrentPool.awaitTermination(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            for (ExecutorService pool : groupedConcurrentPools.values()) {
+                pool.awaitTermination(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private ExecutorService resolveConcurrentExecutor(PipelineDefinition pipeline) {
+        String group = pipeline.executionGroup();
+        if (group == null || group.isBlank()) {
+            return concurrentPool;
+        }
+        return groupedConcurrentPools.computeIfAbsent(group, this::createGroupedConcurrentPool);
+    }
+
+    private ExecutorService createGroupedConcurrentPool(String group) {
+        String threadPrefix = "ef-concurrent-" + sanitizeGroup(group);
+        log.info("Creating dedicated concurrent pool: group={}", group);
+        if ("poc-B".equals(group)) {
+            // Strategy B may block handler threads while waiting for full poll-batch DB flush.
+            // Use elastic threads for this group to avoid deadlock caused by fixed-size pool saturation.
+            ThreadPoolExecutor executor = new ThreadPoolExecutor(
+                    0,
+                    Math.max(concurrentMaxSize, 2048),
+                    60L,
+                    TimeUnit.SECONDS,
+                    new SynchronousQueue<>(),
+                    new AtomicThreadFactory(threadPrefix)
+            );
+            executor.allowCoreThreadTimeOut(true);
+            return executor;
+        }
+        return new ThreadPoolExecutor(
+                concurrentCoreSize,
+                concurrentMaxSize,
+                60L, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(),
+                new AtomicThreadFactory(threadPrefix)
+        );
+    }
+
+    private String sanitizeGroup(String group) {
+        return group.replaceAll("[^a-zA-Z0-9_-]", "_");
     }
 
     private static class AtomicThreadFactory implements ThreadFactory {

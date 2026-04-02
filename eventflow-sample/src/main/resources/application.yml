@@ -4,6 +4,14 @@ server:
 spring:
   application:
     name: eventflow-sample
+  datasource:
+    url: jdbc:postgresql://localhost:5432/dailu
+    driver-class-name: org.postgresql.Driver
+    username: dailu
+    password:
+  sql:
+    init:
+      mode: always
 
 management:
   endpoints:
@@ -24,22 +32,19 @@ eventflow:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
     group-id: ${spring.application.name}-eventflow
-    # topics left empty → Kafka adapter will NOT start (DemoRunner provides events instead)
-    # To use real Kafka: uncomment and set topics
-    # topics:
-    #   - cdc_oceanbase_main
+    topics: t-poc-events
     dlt:
       topic-suffix: .DLT
       enabled: true
   dispatch:
     ordered-worker-count: 4
-    concurrent-core-size: 4
+    concurrent-core-size: 8
     concurrent-max-size: 8
   backpressure:
     high-water-mark: 1000
     low-water-mark: 500
   idempotent:
-    enabled: true
+    enabled: false
     cache-size: 100000
     ttl: 10m
   shutdown:
@@ -47,16 +52,31 @@ eventflow:
   observability:
     tracing-enabled: true
     metrics-enabled: true
+  poc:
+    enable-strategy-a: true
+    enable-strategy-b: true
+    scheduler-delay-ms: 500
+    batch-size: 500
+    simulated-business-latency-ms: 10
+    simulated-db-latency-ms: 0
 
 # ============ OpenTelemetry ============
 otel:
   service:
     name: eventflow-sample
+  traces:
+    exporter:
+      logging-enabled: false
+    batch:
+      schedule-delay-ms: 200
+      max-queue-size: 65536
+      max-export-batch-size: 2048
+      export-timeout-ms: 30000
 
 # ============ Logging ============
 logging:
   level:
-    com.hsbc.pluse: DEBUG
-    io.opentelemetry.exporter.logging: INFO
+    com.hsbc.pluse: ERROR
+    io.opentelemetry.exporter.logging: WARN
   pattern:
     console: "%d{HH:mm:ss.SSS} [%thread] [traceId=%X{traceId:-}] %-5level %logger{36} - %msg%n"

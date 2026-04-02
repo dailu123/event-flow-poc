@@ -42,6 +42,7 @@ public class KafkaInboundAdapter implements InboundPort, Runnable {
     private final KafkaDltPublisher dltPublisher;
     private final BackpressureController backpressure;
     private final List<String> topics;
+    private final Duration pollTimeout;
     private final int shutdownTimeoutSeconds;
     private final Duration commitInterval;
 
@@ -61,6 +62,7 @@ public class KafkaInboundAdapter implements InboundPort, Runnable {
                                KafkaDltPublisher dltPublisher,
                                BackpressureController backpressure,
                                List<String> topics,
+                               long pollTimeoutMs,
                                int shutdownTimeoutSeconds) {
         this.consumer = consumer;
         this.converter = converter;
@@ -71,6 +73,7 @@ public class KafkaInboundAdapter implements InboundPort, Runnable {
         this.dltPublisher = dltPublisher;
         this.backpressure = backpressure;
         this.topics = topics;
+        this.pollTimeout = Duration.ofMillis(Math.max(10L, pollTimeoutMs));
         this.shutdownTimeoutSeconds = shutdownTimeoutSeconds;
         this.commitInterval = Duration.ofSeconds(5);
     }
@@ -94,11 +97,13 @@ public class KafkaInboundAdapter implements InboundPort, Runnable {
                 checkBackpressure();
 
                 // Step 2: Poll
-                ConsumerRecords<String, byte[]> records = consumer.poll(Duration.ofMillis(100));
+                ConsumerRecords<String, byte[]> records = consumer.poll(pollTimeout);
+                String pollBatchId = UUID.randomUUID().toString();
+                int pollBatchSize = records.count();
 
                 // Step 3: Process each record
                 for (ConsumerRecord<String, byte[]> record : records) {
-                    processRecord(record);
+                    processRecord(record, pollBatchId, pollBatchSize);
                 }
 
                 // Step 4: Periodic offset commit
@@ -120,7 +125,7 @@ public class KafkaInboundAdapter implements InboundPort, Runnable {
         log.info("KafkaInboundAdapter poll loop exited");
     }
 
-    private void processRecord(ConsumerRecord<String, byte[]> record) {
+    private void processRecord(ConsumerRecord<String, byte[]> record, String pollBatchId, int pollBatchSize) {
         TopicPartition tp = new TopicPartition(record.topic(), record.partition());
         OffsetTracker tracker = trackers.computeIfAbsent(
                 tp, k -> new OffsetTracker(tp.toString()));
@@ -129,6 +134,9 @@ public class KafkaInboundAdapter implements InboundPort, Runnable {
         Envelope envelope;
         try {
             envelope = converter.convert(record);
+            envelope = envelope
+                    .withHeader("kafka.poll.batch.id", pollBatchId)
+                    .withHeader("kafka.poll.batch.size", String.valueOf(pollBatchSize));
         } catch (Exception e) {
             log.warn("Poison message at {}:{}, routing to DLT", tp, record.offset(), e);
             try {

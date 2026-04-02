@@ -37,6 +37,7 @@ public class EventFlowProperties {
         private String groupId = "eventflow-default";
         private String autoOffsetReset = "earliest";
         private int maxPollRecords = 500;
+        private long pollTimeoutMs = 1000;
         private List<String> topics = List.of();
         private DltProps dlt = new DltProps();
 
@@ -48,6 +49,8 @@ public class EventFlowProperties {
         public void setAutoOffsetReset(String v) { this.autoOffsetReset = v; }
         public int getMaxPollRecords() { return maxPollRecords; }
         public void setMaxPollRecords(int v) { this.maxPollRecords = v; }
+        public long getPollTimeoutMs() { return pollTimeoutMs; }
+        public void setPollTimeoutMs(long v) { this.pollTimeoutMs = v; }
         public List<String> getTopics() { return topics; }
         public void setTopics(List<String> v) { this.topics = v; }
         public DltProps getDlt() { return dlt; }

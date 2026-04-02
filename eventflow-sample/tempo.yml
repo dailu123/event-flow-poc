@@ -34,5 +34,6 @@ storage:
 overrides:
   defaults:
     ingestion:
-      burst_size_bytes: 20000000
-      rate_limit_bytes: 15000000
+      burst_size_bytes: 50000000
+      rate_limit_bytes: 30000000
+      max_traces_per_user: 100000

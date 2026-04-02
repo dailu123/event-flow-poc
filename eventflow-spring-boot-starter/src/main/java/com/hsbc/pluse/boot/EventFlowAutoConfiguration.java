@@ -173,6 +173,7 @@ public class EventFlowAutoConfiguration {
                 dltPublisher,
                 backpressure,
                 props.getKafka().getTopics(),
+                props.getKafka().getPollTimeoutMs(),
                 props.getShutdown().getTimeoutSeconds());
     }
 

@@ -11,4 +11,5 @@ public @interface EventPipeline {
     String routeKey();
     boolean ordered() default false;
     String orderKeyExpr() default "";
+    String executionGroup() default "";
 }

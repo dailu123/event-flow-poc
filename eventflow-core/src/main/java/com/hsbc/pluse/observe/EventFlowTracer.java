@@ -3,8 +3,11 @@ package com.hsbc.pluse.observe;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.TraceFlags;
+import io.opentelemetry.api.trace.TraceState;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
@@ -82,6 +85,32 @@ public class EventFlowTracer {
         var builder = tracer.spanBuilder(spanName)
                 .setSpanKind(SpanKind.INTERNAL);
         attributes.forEach(builder::setAttribute);
+        Span span = builder.startSpan();
+        return executeInSpan(span, work);
+    }
+
+    /**
+     * Creates a CONSUMER span and reconnects to a previous phase span when IDs are available.
+     * For cross-phase processing (e.g. store -> scheduler), we set remote parent to keep one full trace tree.
+     * A link is also kept for explicit phase correlation in tracing UIs.
+     */
+    public <T> T tracedWithLink(String spanName, String routeKey, String eventId,
+                                 String linkedTraceId, String linkedSpanId, Supplier<T> work) {
+        var builder = tracer.spanBuilder(spanName)
+                .setSpanKind(SpanKind.CONSUMER)
+                .setAttribute("eventflow.route_key", routeKey)
+                .setAttribute("eventflow.event_id", eventId);
+
+        if (linkedTraceId != null && linkedSpanId != null) {
+            SpanContext linkedContext = SpanContext.createFromRemoteParent(
+                    linkedTraceId, linkedSpanId, TraceFlags.getSampled(), TraceState.getDefault());
+            // Reattach to original phase span so both phases appear in one end-to-end trace.
+            builder.setParent(Context.root().with(Span.wrap(linkedContext)));
+            builder.setAttribute("eventflow.reconnected_parent", true);
+            // Keep explicit link semantics for UI correlation/debugging.
+            builder.addLink(linkedContext);
+        }
+
         Span span = builder.startSpan();
         return executeInSpan(span, work);
     }

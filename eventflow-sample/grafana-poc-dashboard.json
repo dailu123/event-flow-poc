@@ -1,0 +1,301 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "eventflow-poc",
+    "title": "EventFlow POC: Strategy A vs B",
+    "description": "Real-time E2E latency comparison: Direct processing (A) vs Store-and-Process (B)",
+    "tags": ["eventflow", "poc"],
+    "timezone": "browser",
+    "refresh": "5s",
+    "time": {
+      "from": "now-15m",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Trace Explore Links",
+        "type": "text",
+        "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+        "options": {
+          "mode": "markdown",
+          "content": "**Strategy A** [Traces](http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22cfho9hth65atcd%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22cfho9hth65atcd%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7Bresource.service.name%3D%5C%22eventflow-sample%5C%22+%26%26+span.poc.strategy%3D%5C%22A%5C%22%7D%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22now-1h%22%2C%22to%22%3A%22now%22%7D%7D) · **Strategy B** [Traces](http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22cfho9hth65atcd%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22cfho9hth65atcd%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7Bresource.service.name%3D%5C%22eventflow-sample%5C%22+%26%26+span.poc.strategy%3D%5C%22B%5C%22%7D%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22now-1h%22%2C%22to%22%3A%22now%22%7D%7D) · B关键span: `poc.db.store` / `poc.strategyB.process` / `poc.business.process` / `poc.outbound.publish` · `poc.storeDelayMs`=队列等待时长 · E2E=sendTimestamp→处理完成"
+        }
+      },
+      {
+        "id": 10,
+        "title": "E2E Avg Latency: A vs B (ms)",
+        "description": "Rolling 5m average E2E latency",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 3 },
+        "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+        "fieldConfig": {
+          "defaults": {
+            "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "pointSize": 3, "showPoints": "auto" },
+            "unit": "ms",
+            "color": { "mode": "palette-classic" }
+          },
+          "overrides": []
+        },
+        "options": {
+          "legend": { "displayMode": "list", "placement": "bottom" },
+          "tooltip": { "mode": "multi", "sort": "desc" }
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "sum(rate(poc_e2e_duration_seconds_sum{strategy=\"A\"}[1m])) / sum(rate(poc_e2e_duration_seconds_count{strategy=\"A\"}[1m])) * 1000",
+            "legendFormat": "A: Direct"
+          },
+          {
+            "refId": "B",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "sum(rate(poc_e2e_duration_seconds_sum{strategy=\"B\"}[1m])) / sum(rate(poc_e2e_duration_seconds_count{strategy=\"B\"}[1m])) * 1000",
+            "legendFormat": "B: Store+Process"
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "title": "E2E P95 Latency: A vs B (ms)",
+        "description": "Rolling 5m P95 E2E latency",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 3 },
+        "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+        "fieldConfig": {
+          "defaults": {
+            "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "pointSize": 3, "showPoints": "auto" },
+            "unit": "ms",
+            "color": { "mode": "palette-classic" }
+          },
+          "overrides": []
+        },
+        "options": {
+          "legend": { "displayMode": "list", "placement": "bottom" },
+          "tooltip": { "mode": "multi", "sort": "desc" }
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "histogram_quantile(0.95, sum by (le) (rate(poc_e2e_duration_seconds_bucket{strategy=\"A\"}[1m]))) * 1000",
+            "legendFormat": "A P95"
+          },
+          {
+            "refId": "B",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "histogram_quantile(0.95, sum by (le) (rate(poc_e2e_duration_seconds_bucket{strategy=\"B\"}[1m]))) * 1000",
+            "legendFormat": "B P95"
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "title": "Throughput: A vs B (events/sec)",
+        "description": "Rolling 5m processing throughput",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 11 },
+        "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+        "fieldConfig": {
+          "defaults": {
+            "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "pointSize": 3, "showPoints": "auto" },
+            "unit": "ops",
+            "color": { "mode": "palette-classic" }
+          },
+          "overrides": []
+        },
+        "options": {
+          "legend": { "displayMode": "list", "placement": "bottom" },
+          "tooltip": { "mode": "multi", "sort": "desc" }
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "sum(rate(poc_events_processed_total{strategy=\"A\"}[30s]))",
+            "legendFormat": "A: Direct"
+          },
+          {
+            "refId": "B",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "sum(rate(poc_events_processed_total{strategy=\"B\"}[30s]))",
+            "legendFormat": "B: Store+Process"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Strategy B DB Overview",
+        "description": "B策略数据库视角：处理总条数、数据库操作总次数、每次数据库操作平均耗时",
+        "type": "stat",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 11 },
+        "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "color": { "mode": "palette-classic" }
+          },
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "DB 平均耗时 (5m)" },
+              "properties": [
+                { "id": "unit", "value": "ms" }
+              ]
+            }
+          ]
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "textMode": "value_and_name",
+          "colorMode": "value",
+          "orientation": "auto"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "sum(increase(poc_events_processed_total{strategy=\"B\"}[5m]))",
+            "legendFormat": "B 处理总条数"
+          },
+          {
+            "refId": "B",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "sum(increase(poc_db_operation_total{strategy=\"B\"}[5m]))",
+            "legendFormat": "DB 操作总次数"
+          },
+          {
+            "refId": "C",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "sum(increase(poc_db_operation_duration_seconds_sum{strategy=\"B\"}[5m])) / clamp_min(sum(increase(poc_db_operation_duration_seconds_count{strategy=\"B\"}[5m])), 1e-9) * 1000",
+            "legendFormat": "DB 平均耗时 (5m)"
+          }
+        ]
+      },
+      {
+        "id": 14,
+        "title": "Total Processed",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 0, "y": 19 },
+        "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+        "fieldConfig": {
+          "defaults": { "color": { "mode": "palette-classic" } },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "textMode": "auto",
+          "colorMode": "value"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "sum(poc_events_processed_total{strategy=\"A\"})",
+            "legendFormat": "A"
+          },
+          {
+            "refId": "B",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "sum(poc_events_processed_total{strategy=\"B\"})",
+            "legendFormat": "B"
+          }
+        ]
+      },
+      {
+        "id": 15,
+        "title": "Overall E2E Avg (ms)",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 6, "y": 19 },
+        "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+        "fieldConfig": {
+          "defaults": { "unit": "ms", "color": { "mode": "palette-classic" } },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "textMode": "auto",
+          "colorMode": "value"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "sum(increase(poc_e2e_duration_seconds_sum{strategy=\"A\"}[5m])) / sum(increase(poc_e2e_duration_seconds_count{strategy=\"A\"}[5m])) * 1000",
+            "legendFormat": "A Avg"
+          },
+          {
+            "refId": "B",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "sum(increase(poc_e2e_duration_seconds_sum{strategy=\"B\"}[5m])) / sum(increase(poc_e2e_duration_seconds_count{strategy=\"B\"}[5m])) * 1000",
+            "legendFormat": "B Avg"
+          }
+        ]
+      },
+      {
+        "id": 16,
+        "title": "Overall E2E P50 (ms)",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 12, "y": 19 },
+        "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+        "fieldConfig": {
+          "defaults": { "unit": "ms", "color": { "mode": "palette-classic" } },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "textMode": "auto",
+          "colorMode": "value"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "histogram_quantile(0.5, sum by (le) (increase(poc_e2e_duration_seconds_bucket{strategy=\"A\"}[5m]))) * 1000",
+            "legendFormat": "A P50"
+          },
+          {
+            "refId": "B",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "histogram_quantile(0.5, sum by (le) (increase(poc_e2e_duration_seconds_bucket{strategy=\"B\"}[5m]))) * 1000",
+            "legendFormat": "B P50"
+          }
+        ]
+      },
+      {
+        "id": 17,
+        "title": "Overall E2E P95 (ms)",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 18, "y": 19 },
+        "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+        "fieldConfig": {
+          "defaults": { "unit": "ms", "color": { "mode": "palette-classic" } },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "textMode": "auto",
+          "colorMode": "value"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "histogram_quantile(0.95, sum by (le) (increase(poc_e2e_duration_seconds_bucket{strategy=\"A\"}[5m]))) * 1000",
+            "legendFormat": "A P95"
+          },
+          {
+            "refId": "B",
+            "datasource": { "type": "prometheus", "uid": "afho0wduon01sc" },
+            "expr": "histogram_quantile(0.95, sum by (le) (increase(poc_e2e_duration_seconds_bucket{strategy=\"B\"}[5m]))) * 1000",
+            "legendFormat": "B P95"
+          }
+        ]
+      }
+    ],
+    "templating": { "list": [] },
+    "annotations": { "list": [] },
+    "schemaVersion": 39
+  },
+  "overwrite": true
+}

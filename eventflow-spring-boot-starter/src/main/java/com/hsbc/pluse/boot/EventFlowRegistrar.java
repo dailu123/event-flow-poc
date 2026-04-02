@@ -40,11 +40,12 @@ public class EventFlowRegistrar implements SmartInitializingSingleton {
                         ann.routeKey(),
                         ann.ordered(),
                         ann.orderKeyExpr(),
+                        ann.executionGroup(),
                         handler,
                         Collections.emptyList()
                 ));
-                log.info("Auto-registered @EventPipeline: bean={}, routeKey={}, ordered={}",
-                        entry.getKey(), ann.routeKey(), ann.ordered());
+                log.info("Auto-registered @EventPipeline: bean={}, routeKey={}, ordered={}, executionGroup={}",
+                        entry.getKey(), ann.routeKey(), ann.ordered(), ann.executionGroup());
             } else {
                 log.warn("Bean '{}' annotated with @EventPipeline but does not implement EventHandler, skipping",
                         entry.getKey());

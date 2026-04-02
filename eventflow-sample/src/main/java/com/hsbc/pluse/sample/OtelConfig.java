@@ -30,6 +30,21 @@ public class OtelConfig {
     @Value("${otel.exporter.otlp.endpoint:http://localhost:4317}")
     private String otlpEndpoint;
 
+    @Value("${otel.traces.exporter.logging-enabled:false}")
+    private boolean loggingExporterEnabled;
+
+    @Value("${otel.traces.batch.schedule-delay-ms:200}")
+    private long batchScheduleDelayMs;
+
+    @Value("${otel.traces.batch.max-queue-size:65536}")
+    private int batchMaxQueueSize;
+
+    @Value("${otel.traces.batch.max-export-batch-size:2048}")
+    private int batchMaxExportBatchSize;
+
+    @Value("${otel.traces.batch.export-timeout-ms:30000}")
+    private long batchExportTimeoutMs;
+
     @Bean
     public OpenTelemetry openTelemetry() {
         Resource resource = Resource.getDefault()
@@ -42,13 +57,20 @@ public class OtelConfig {
                 .setEndpoint(otlpEndpoint)
                 .build();
 
-        SdkTracerProvider tracerProvider = SdkTracerProvider.builder()
+        var tracerProviderBuilder = SdkTracerProvider.builder()
                 .addSpanProcessor(BatchSpanProcessor.builder(otlpExporter)
-                        .setScheduleDelay(Duration.ofSeconds(1))
+                        .setScheduleDelay(Duration.ofMillis(batchScheduleDelayMs))
+                        .setMaxQueueSize(batchMaxQueueSize)
+                        .setMaxExportBatchSize(batchMaxExportBatchSize)
+                        .setExporterTimeout(Duration.ofMillis(batchExportTimeoutMs))
                         .build())
-                .addSpanProcessor(SimpleSpanProcessor.create(LoggingSpanExporter.create()))
-                .setResource(resource)
-                .build();
+                .setResource(resource);
+
+        if (loggingExporterEnabled) {
+            tracerProviderBuilder.addSpanProcessor(SimpleSpanProcessor.create(LoggingSpanExporter.create()));
+        }
+
+        SdkTracerProvider tracerProvider = tracerProviderBuilder.build();
 
         OpenTelemetrySdk sdk = OpenTelemetrySdk.builder()
                 .setTracerProvider(tracerProvider)
